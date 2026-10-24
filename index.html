@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<title>Solitaire</title>
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --table:#1f6b45; --slot:rgba(255,255,255,.28); --card:#fffdf8; --ink:#161616; --red:#c8102e;
+  --back1:#2b4c9b; --back2:#1d3878; --btn:#fffdf8; --btn-ink:#164a32; --text:#ffffff; --muted:#4a4a4a;
+  color-scheme:light;
+  box-sizing:border-box;
+  padding-top:env(safe-area-inset-top,0px);
+  padding-bottom:env(safe-area-inset-bottom,0px);
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){ --table:#123f29; --card:#f3f0e7; --btn:#ebe7da; --btn-ink:#0f3322; color-scheme:dark; }
+}
+:root[data-theme="dark"]{ --table:#123f29; --card:#f3f0e7; --btn:#ebe7da; --btn-ink:#0f3322; color-scheme:dark; }
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+html,body{height:100%;margin:0}
+body{
+  background:var(--table); color:var(--text);
+  font-family:'Atkinson Hyperlegible',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+  display:flex; flex-direction:column; overflow:hidden; overscroll-behavior:none;
+  user-select:none; -webkit-user-select:none; touch-action:manipulation; -webkit-tap-highlight-color:transparent;
+}
+#board{position:relative; flex:1; width:100%; max-width:760px; margin:0 auto; touch-action:none}
+.card,.slot{position:absolute; box-sizing:border-box; border-radius:7px}
+.card{box-shadow:0 1px 3px rgba(0,0,0,.4); transition:left .18s ease, top .18s ease; cursor:pointer}
+.card.drag{transition:none; box-shadow:0 8px 18px rgba(0,0,0,.45)}
+.face{background:var(--card); color:var(--ink); border:1px solid rgba(0,0,0,.3)}
+.face.red{color:var(--red)}
+.back{background:repeating-linear-gradient(45deg,var(--back1) 0 5px,var(--back2) 5px 10px); border:2px solid #fff}
+.lbl{position:absolute; left:7%; top:3%; font-weight:700; line-height:1; white-space:nowrap; letter-spacing:-.05em}
+.big{position:absolute; bottom:8%; left:0; right:0; text-align:center; line-height:1}
+.slot{border:2px dashed var(--slot); color:var(--slot); display:flex; align-items:center; justify-content:center; font-weight:700; line-height:1}
+.shake{animation:sh .32s}
+@keyframes sh{0%,100%{transform:translateX(0)}25%{transform:translateX(-5px)}75%{transform:translateX(5px)}}
+#bar{display:flex; gap:12px; padding:10px 12px 14px; width:100%; max-width:760px; margin:0 auto; box-sizing:border-box}
+#bar button{flex:1; font:inherit; font-size:1.35rem; font-weight:700; padding:16px 8px; border:0; border-radius:14px; background:var(--btn); color:var(--btn-ink); cursor:pointer}
+#bar button:disabled{opacity:.4}
+button:focus-visible{outline:3px solid #ffd54a; outline-offset:2px}
+.overlay{position:fixed; inset:0; background:rgba(0,0,0,.55); display:none; align-items:center; justify-content:center; z-index:999}
+.overlay.show{display:flex}
+.box{background:var(--card); color:var(--ink); padding:28px 22px; border-radius:18px; text-align:center; width:min(88%,420px); box-sizing:border-box}
+.box p{font-size:1.9rem; font-weight:700; margin:0 0 20px}
+.box button{display:block; width:100%; font:inherit; font-size:1.45rem; font-weight:700; padding:16px 12px; margin-top:12px; border:0; border-radius:14px; background:var(--table); color:#fff; cursor:pointer}
+.box button small{display:block; font-size:1.05rem; font-weight:400; margin-top:4px; opacity:.9}
+.box button.plain{background:transparent; color:var(--muted); border:2px solid #ccc}
+@media (prefers-reduced-motion:reduce){.card{transition:none}.shake{animation:none}}
+</style>
+</head>
+<body>
+<div id="board"></div>
+<div id="bar">
+  <button id="undo">Annuler</button>
+  <button id="new">Nouvelle partie</button>
+</div>
+
+<div id="win" class="overlay"><div class="box">
+  <p>Bravo&nbsp;! Vous avez gagné.</p>
+  <button id="again">Rejouer</button>
+</div></div>
+
+<div id="modes" class="overlay"><div class="box">
+  <p>Nouvelle partie</p>
+  <button data-draw="1">Facile<small>Une carte à la fois</small></button>
+  <button data-draw="3">Normal<small>Trois cartes à la fois</small></button>
+  <button class="plain" id="back">Retour</button>
+</div></div>
+
+<script>
+const SUITS = ['♥','♠','♦','♣'];          // index pair = rouge
+const RANKS = ['','A','2','3','4','5','6','7','8','9','10','V','D','R'];
+const board = document.getElementById('board');
+const undoBtn = document.getElementById('undo');
+const modes = document.getElementById('modes');
+let S, hist = [], els = {}, slotEls = {}, busy = false, drag = null;
+
+const isRed = c => c.s % 2 === 0;
+
+function save(){ try{ localStorage.setItem('solitaire', JSON.stringify({S, hist:hist.slice(-60)})); }catch(e){} }
+function load(){
+  try{ const d = JSON.parse(localStorage.getItem('solitaire')); if(d && d.S){ S = d.S; hist = d.hist || []; if(!S.draw) S.draw = 1; return true; } }catch(e){}
+  return false;
+}
+
+function deal(drawCount){
+  const d = [];
+  for(let s=0;s<4;s++) for(let r=1;r<=13;r++) d.push({id:s*13+r, s, r, up:false});
+  for(let i=d.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [d[i],d[j]]=[d[j],d[i]]; }
+  S = {draw:drawCount||1, stock:[], waste:[], found:[[],[],[],[]], tab:[[],[],[],[],[],[],[]]};
+  for(let i=0;i<7;i++) for(let j=i;j<7;j++) S.tab[j].push(d.pop());
+  S.tab.forEach(col => col[col.length-1].up = true);
+  S.stock = d;
+  hist = [];
+  document.getElementById('win').classList.remove('show');
+  modes.classList.remove('show');
+  save(); render();
+}
+
+function build(){
+  board.innerHTML = '';
+  const mk = (key, txt) => { const e=document.createElement('div'); e.className='slot'; e.dataset.slot=key; e.textContent=txt||''; board.appendChild(e); slotEls[key]=e; };
+  mk('stock','↻'); mk('waste');
+  for(let f=0;f<4;f++) mk('f'+f, SUITS[f]);
+  for(let t=0;t<7;t++) mk('t'+t);
+  for(let id=1;id<=52;id++){ const e=document.createElement('div'); e.className='card'; e.dataset.id=id; board.appendChild(e); els[id]=e; }
+}
+
+function geo(){
+  const W = board.clientWidth, H = board.clientHeight;
+  const g = Math.max(4, W*0.016);
+  const cw = Math.min((W - g*8)/7, H/(1.4*3.3));
+  const ch = cw*1.4;
+  const ox = (W - (7*cw + 6*g))/2;
+  return {W, H, g, cw, ch, x:i => ox + i*(cw+g), ty: g + ch + g*2.2};
+}
+
+function place(e, x, y, w, h, z){ e.style.left=x+'px'; e.style.top=y+'px'; e.style.width=w+'px'; e.style.height=h+'px'; if(z!==undefined) e.style.zIndex=z; }
+
+function paint(c, G){
+  const e = els[c.id];
+  if(!c.up){ e.className='card back'; e.innerHTML=''; return; }
+  e.className = 'card face' + (isRed(c) ? ' red' : '');
+  const rs = RANKS[c.r] === '10' ? G.cw*0.36 : G.cw*0.42;
+  e.innerHTML = `<span class="lbl" style="font-size:${rs}px">${RANKS[c.r]}${SUITS[c.s]}</span><span class="big" style="font-size:${G.cw*0.62}px">${SUITS[c.s]}</span>`;
+}
+
+function render(){
+  const G = geo(), top = G.g;
+  place(slotEls.stock, G.x(0), top, G.cw, G.ch); slotEls.stock.style.fontSize = G.cw*0.55+'px';
+  place(slotEls.waste, G.x(1), top, G.cw, G.ch);
+  for(let f=0;f<4;f++){ place(slotEls['f'+f], G.x(f+3), top, G.cw, G.ch); slotEls['f'+f].style.fontSize = G.cw*0.6+'px'; }
+  for(let t=0;t<7;t++) place(slotEls['t'+t], G.x(t), G.ty, G.cw, G.ch);
+
+  S.stock.forEach((c,i) => { c.up=false; paint(c,G); place(els[c.id], G.x(0), top, G.cw, G.ch, 10+i); });
+  const fanStart = S.draw === 3 ? Math.max(0, S.waste.length-3) : S.waste.length;
+  S.waste.forEach((c,i) => {
+    const off = i >= fanStart ? (i - fanStart) * G.cw * 0.32 : 0;
+    paint(c,G); place(els[c.id], G.x(1) + off, top, G.cw, G.ch, 10+i);
+  });
+  S.found.forEach((p,f) => p.forEach((c,i) => { paint(c,G); place(els[c.id], G.x(f+3), top, G.cw, G.ch, 10+i); }));
+
+  const avail = G.H - G.ty - G.g;
+  S.tab.forEach((col,t) => {
+    const nd = col.filter(c=>!c.up).length, nu = col.length - nd;
+    let dOff = G.ch*0.13, uOff = G.ch*0.34;
+    const need = nd*dOff + Math.max(0,nu-1)*uOff + G.ch;
+    if(need > avail && need > G.ch){ const f = Math.max(0.2,(avail-G.ch)/(need-G.ch)); dOff*=f; uOff*=f; }
+    let y = G.ty;
+    col.forEach((c,i) => { paint(c,G); place(els[c.id], G.x(t), y, G.cw, G.ch, 10+i); y += c.up ? uOff : dOff; });
+  });
+  undoBtn.disabled = hist.length === 0 || busy;
+}
+
+function shake(e){ if(!e) return; e.classList.remove('shake'); void e.offsetWidth; e.classList.add('shake'); }
+function snap(){ hist.push(JSON.stringify(S)); if(hist.length>200) hist.shift(); }
+function flipTops(){ S.tab.forEach(col => { if(col.length && !col[col.length-1].up) col[col.length-1].up = true; }); }
+
+function canFound(c){ return S.found[c.s].length === c.r - 1; }
+function canTab(c, t){
+  const col = S.tab[t];
+  if(!col.length) return c.r === 13;
+  const tp = col[col.length-1];
+  return tp.up && isRed(tp) !== isRed(c) && tp.r === c.r + 1;
+}
+
+function locate(id){
+  for(const k of ['stock','waste']){ const i=S[k].findIndex(c=>c.id===id); if(i>=0) return {pile:S[k], kind:k, i}; }
+  for(let f=0;f<4;f++){ const i=S.found[f].findIndex(c=>c.id===id); if(i>=0) return {pile:S.found[f], kind:'found', i}; }
+  for(let t=0;t<7;t++){ const i=S.tab[t].findIndex(c=>c.id===id); if(i>=0) return {pile:S.tab[t], kind:'tab', t, i}; }
+}
+
+function canPick(L){
+  if(L.kind === 'waste' || L.kind === 'found') return L.i === L.pile.length-1;
+  return L.kind === 'tab' && L.pile[L.i].up;
+}
+
+function moveCards(pile, i, dest){
+  snap();
+  const cards = pile.splice(i);
+  dest.push(...cards);
+  flipTops(); save(); render(); checkEnd();
+}
+
+/* Toucher : la carte va toute seule au meilleur endroit */
+function tryMove(L){
+  const cards = L.pile.slice(L.i), c = cards[0];
+  if(cards.length === 1 && L.kind !== 'found' && canFound(c)) return moveCards(L.pile, L.i, S.found[c.s]);
+  const targets = [0,1,2,3,4,5,6].filter(t => !(L.kind==='tab' && t===L.t));
+  const full = targets.filter(t => S.tab[t].length && canTab(c,t));
+  if(full.length) return moveCards(L.pile, L.i, S.tab[full[0]]);
+  const kingFromBottom = L.kind==='tab' && L.i===0;
+  const empty = targets.filter(t => !S.tab[t].length && canTab(c,t));
+  if(empty.length && !kingFromBottom) return moveCards(L.pile, L.i, S.tab[empty[0]]);
+  shake(els[c.id]);
+}
+
+function tapCard(id){
+  const L = locate(id);
+  if(L.kind === 'stock') return draw();
+  if(!canPick(L)) { if(L.kind === 'tab') shake(els[id]); return; }
+  tryMove(L);
+}
+
+function draw(){
+  if(S.stock.length){
+    snap();
+    for(let k=0; k<S.draw && S.stock.length; k++){ const c = S.stock.pop(); c.up = true; S.waste.push(c); }
+  } else if(S.waste.length){
+    snap(); S.stock = S.waste.reverse().map(c => (c.up=false, c)); S.waste = [];
+  } else { shake(slotEls.stock); return; }
+  save(); render();
+}
+
+/* Glisser-déposer */
+function drop(d){
+  const G = geo(), first = d.cards[0], c = first.c, L = d.L;
+  const cx = parseFloat(first.e.style.left) + G.cw/2;
+  const cy = parseFloat(first.e.style.top) + G.ch/2;
+  if(cy < G.ty - G.g){
+    // zone du haut : fondations
+    if(cx > G.x(3) - G.cw/2 && d.cards.length === 1 && L.kind !== 'found' && canFound(c))
+      return moveCards(L.pile, L.i, S.found[c.s]);
+  } else {
+    let best = -1, bd = Infinity;
+    for(let t=0;t<7;t++){ const dist = Math.abs(cx - (G.x(t) + G.cw/2)); if(dist < bd){ bd = dist; best = t; } }
+    if(bd < G.cw && !(L.kind==='tab' && L.t===best) && canTab(c, best))
+      return moveCards(L.pile, L.i, S.tab[best]);
+  }
+  render(); // la carte retourne à sa place
+}
+
+board.addEventListener('pointerdown', e => {
+  if(busy || drag) return;
+  const ce = e.target.closest('[data-id]'), se = e.target.closest('[data-slot]');
+  drag = {x:e.clientX, y:e.clientY, moved:false, pid:e.pointerId, id:ce ? +ce.dataset.id : null, slot:se ? se.dataset.slot : null};
+  if(ce){
+    const L = locate(drag.id);
+    drag.L = L;
+    if(L.kind !== 'stock' && canPick(L))
+      drag.cards = L.pile.slice(L.i).map(c => ({c, e:els[c.id], x:parseFloat(els[c.id].style.left), y:parseFloat(els[c.id].style.top)}));
+  }
+  try{ board.setPointerCapture(e.pointerId); }catch(err){}
+});
+
+board.addEventListener('pointermove', e => {
+  if(!drag || e.pointerId !== drag.pid || !drag.cards) return;
+  const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+  if(!drag.moved){
+    if(Math.hypot(dx,dy) < 10) return;
+    drag.moved = true;
+    drag.cards.forEach((o,k) => { o.e.classList.add('drag'); o.e.style.zIndex = 500 + k; });
+  }
+  drag.cards.forEach(o => { o.e.style.left = (o.x+dx)+'px'; o.e.style.top = (o.y+dy)+'px'; });
+});
+
+board.addEventListener('pointerup', e => {
+  if(!drag || e.pointerId !== drag.pid) return;
+  const d = drag; drag = null;
+  if(d.moved) return drop(d);
+  if(d.id != null) tapCard(d.id);
+  else if(d.slot === 'stock') draw();
+});
+
+board.addEventListener('pointercancel', () => { if(drag){ drag = null; render(); } });
+
+function checkEnd(){
+  if(S.found.every(p => p.length === 13)){ save(); setTimeout(()=>document.getElementById('win').classList.add('show'), 300); return; }
+  if(!busy && !S.stock.length && !S.waste.length && S.tab.every(col => col.every(c => c.up))) autoFinish();
+}
+
+function autoFinish(){
+  busy = true; render();
+  const step = () => {
+    let best = null;
+    S.tab.forEach(col => { const c = col[col.length-1]; if(c && canFound(c) && (!best || c.r < best.c.r)) best = {col, c}; });
+    if(!best){ busy = false; save(); render(); checkEnd(); return; }
+    best.col.pop(); S.found[best.c.s].push(best.c); render();
+    if(S.found.every(p => p.length === 13)){ busy = false; hist = []; save(); render(); checkEnd(); return; }
+    setTimeout(step, 140);
+  };
+  setTimeout(step, 250);
+}
+
+function showModes(){ document.getElementById('win').classList.remove('show'); modes.classList.add('show'); }
+
+undoBtn.addEventListener('click', () => { if(busy || !hist.length) return; S = JSON.parse(hist.pop()); save(); render(); });
+document.getElementById('new').addEventListener('click', () => { if(!busy) showModes(); });
+document.getElementById('again').addEventListener('click', showModes);
+document.getElementById('back').addEventListener('click', () => {
+  modes.classList.remove('show');
+  if(S.found.every(p => p.length === 13)) document.getElementById('win').classList.add('show');
+});
+modes.querySelectorAll('[data-draw]').forEach(b => b.addEventListener('click', () => deal(+b.dataset.draw)));
+window.addEventListener('resize', render);
+
+build();
+if(load()){ render(); checkEnd(); } else deal(1);
+</script>
+</body>
+</html>
